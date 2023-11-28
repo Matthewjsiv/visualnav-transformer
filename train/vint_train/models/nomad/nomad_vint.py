@@ -149,7 +149,7 @@ class Vanilla_NoMaD_ViNT(nn.Module):
 
         # Initialize the observation encoder
         if obs_encoder.split("-")[0] == "efficientnet":
-            self.obs_encoder = EfficientNet.from_name(obs_encoder, in_channels=3) # context
+            self.obs_encoder = EfficientNet.from_name(obs_encoder, in_channels=1) # context
             self.obs_encoder = replace_bn_with_gn(self.obs_encoder)
             self.num_obs_features = self.obs_encoder._fc.in_features
             self.obs_encoder_type = "efficientnet"
@@ -183,8 +183,10 @@ class Vanilla_NoMaD_ViNT(nn.Module):
         device = obs_img.device
 
         # Get the observation encoding
-        obs_img = torch.split(obs_img, 3, dim=1)
+        obs_img = torch.split(obs_img, 1, dim=1)
+        # print(len(obs_img),obs_img[0].shape)
         obs_img = torch.concat(obs_img, dim=0)
+        # print(obs_img.shape)
 
         obs_encoding = self.obs_encoder.extract_features(obs_img)
         obs_encoding = self.obs_encoder._avg_pooling(obs_encoding)
@@ -193,7 +195,7 @@ class Vanilla_NoMaD_ViNT(nn.Module):
             obs_encoding = self.obs_encoder._dropout(obs_encoding)
         obs_encoding = self.compress_obs_enc(obs_encoding)
         obs_encoding = obs_encoding.unsqueeze(1)
-        obs_encoding = obs_encoding.reshape((self.context_size+1, -1, self.obs_encoding_size))
+        obs_encoding = obs_encoding.reshape((self.context_size, -1, self.obs_encoding_size))
         obs_encoding = torch.transpose(obs_encoding, 0, 1)
 
         # If a goal mask is provided, mask some of the goal tokens
