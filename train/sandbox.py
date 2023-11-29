@@ -5,11 +5,13 @@ import numpy as np
 import yaml
 import time
 import pdb
-
+import matplotlib.pyplot as plt
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, ConcatDataset
 from torch.optim import Adam, AdamW
+import torch.nn.functional as F
+
 from torchvision import transforms
 import torch.backends.cudnn as cudnn
 from warmup_scheduler import GradualWarmupScheduler
@@ -27,6 +29,7 @@ from vint_train.models.vint.vit import ViT
 from vint_train.models.nomad.nomad import Vanilla_NoMaD, NoMaD, DenseNetwork
 from vint_train.models.nomad.nomad_vint import NoMaD_ViNT, replace_bn_with_gn, Vanilla_NoMaD_ViNT
 from diffusion_policy.model.diffusion.conditional_unet1d import ConditionalUnet1D
+from vint_train.visualizing.visualize_utils import to_numpy, from_numpy
 
 
 from vint_train.data.vint_dataset import ViNT_Dataset
@@ -36,6 +39,57 @@ from vint_train.training.train_eval_loop import (
     load_model,
 )
 
+def model_output(
+    model: nn.Module,
+    noise_scheduler: DDPMScheduler,
+    batch_obs_images: torch.Tensor,
+    pred_horizon: int,
+    action_dim: int,
+    num_samples: int,
+    device: torch.device,
+):
+
+    # print(batch_obs_images.requires_grad)
+    obs_cond = model("vision_encoder", obs_img=batch_obs_images)
+    # obs_cond = obs_cond.flatten(start_dim=1)
+    # print(obs_cond.requires_grad)
+    # obs_cond = obs_cond.unsqueeze(1)
+
+    # print(obs_cond.shape)
+    obs_cond = obs_cond.repeat_interleave(num_samples, dim=0)
+    # print(obs_cond.shape)
+    # initialize action from Gaussian noise
+    noisy_diffusion_output = torch.randn(
+        (len(obs_cond), pred_horizon, action_dim), device=device)
+    diffusion_output = noisy_diffusion_output
+
+    # print(diffusion_output.shape)
+    # print(obs_cond.requires_grad, diffusion_output.requires_grad)
+    for k in noise_scheduler.timesteps[:]:
+        # predict noise
+        # print('here')
+        noise_pred = model(
+            "noise_pred_net",
+            sample=diffusion_output,
+            timestep=k.unsqueeze(-1).repeat(diffusion_output.shape[0]).to(device),
+            global_cond=obs_cond
+        )
+
+        # inverse diffusion step (remove noise)
+        diffusion_output = noise_scheduler.step(
+            model_output=noise_pred,
+            timestep=k,
+            sample=diffusion_output
+        ).prev_sample
+
+    return diffusion_output
+
+
+def get_delta(actions):
+    # append zeros to first action
+    ex_actions = np.concatenate([np.zeros((actions.shape[0],1,actions.shape[-1])), actions], axis=1)
+    delta = ex_actions[:,1:] - ex_actions[:,:-1]
+    return delta
 
 def main(config):
     assert config["distance"]["min_dist_cat"] < config["distance"]["max_dist_cat"]
@@ -165,6 +219,49 @@ def main(config):
             clip_sample=True,
             prediction_type='epsilon'
         )
+    elif config["model_type"] == "vanilla_nomad":
+        vision_encoder = Vanilla_NoMaD_ViNT(
+            obs_encoding_size=config["encoding_size"],
+            context_size=config["context_size"],
+            mha_num_attention_heads=config["mha_num_attention_heads"],
+            mha_num_attention_layers=config["mha_num_attention_layers"],
+            mha_ff_dim_factor=config["mha_ff_dim_factor"],
+        )
+        vision_encoder = replace_bn_with_gn(vision_encoder)
+
+        noise_pred_net = ConditionalUnet1D(
+                input_dim=2,
+                global_cond_dim=config["encoding_size"],
+                down_dims=config["down_dims"],
+                cond_predict_scale=config["cond_predict_scale"]
+            )
+        # noise_pred_net = UNet2DConditionModel(
+        #         sample_size=(config["num_trajectories"],config["num_waypoints"]),
+        #         in_channels=2,
+        #         out_channels=2,
+        #         block_out_channels=[32,64,128,256],
+        #         encoder_hid_dim=config["encoding_size"]
+        #     )
+
+        dist_pred_network = DenseNetwork(embedding_dim=config["encoding_size"])
+
+        model = Vanilla_NoMaD(
+            vision_encoder=vision_encoder,
+            noise_pred_net=noise_pred_net,
+            dist_pred_net=dist_pred_network,
+        )
+
+        noise_scheduler = DDPMScheduler(
+            num_train_timesteps=config["num_diffusion_iters"],
+            beta_schedule='squaredcos_cap_v2',
+            clip_sample=True,
+            prediction_type='epsilon'
+        )
+
+        # print(vision_encoder)
+        # print(')))))))))))))))))')
+        # print(noise_pred_net)
+
     else:
         raise ValueError(f"Model {config['model']} not supported")
 
@@ -293,15 +390,124 @@ def main(config):
         #     eval_freq=config["eval_freq"],
         # )
 
-        B = 1
+        B = 64
         costmap = torch.rand((B,1,120,120)).cuda()
-        obsgoal_cond = model("vision_encoder", obs_img=costmap)
-        print(obsgoal_cond.shape)
+        TRAJ_LIB = np.load('../../traj_lib_testing/traj_lib.npy')[:,:64,:2][::500][0]
+        #
+        plt.plot(TRAJ_LIB[:,0],TRAJ_LIB[:,1])
+        plt.show()
+        TRAJ_LIB = np.stack([TRAJ_LIB]*B)
+        # for i in range(10):
+        #     plt.plot(TRAJ_LIB[0,i,:,1],TRAJ_LIB[0,i,:,0])
+        # plt.show()
+        # print(TRAJ_LIB.shape)
+        # traj = torch.randn((B,2,10,78), device=device)
+        # print(TRAJ_LIB.shape)
+        traj = torch.tensor(TRAJ_LIB,dtype=torch.float32).cuda()/30
+        # print(traj.dtype)
 
-        #og input is BxTx2, T= 5
-        #ideally we want BxKxTx2, hmmmm
-        # action = torch.randn((B,10,50,2), device=device)
-        # action = torch.randn((B,51,2), device=device)
+
+        B = traj.shape[0]
+
+        losses = []
+
+        for i in range(1000):
+            # print(traj)
+            # Generate random goal mask
+            obsgoal_cond = model("vision_encoder", obs_img=costmap)
+
+            # Sample noise to add to actions
+            noise = torch.randn(traj.shape, device=device)
+            # print(noise.dtype)
+            # Sample a diffusion iteration for each data point
+            timesteps = torch.randint(
+                0, noise_scheduler.config.num_train_timesteps,
+                (B,), device=device
+            ).long()
+
+            # Add noise to the clean images according to the noise magnitude at each diffusion iteration
+            noisy_traj = noise_scheduler.add_noise(
+                traj, noise, timesteps)
+
+            # print(traj.shape, noisy_traj.shape)
+
+            vnoisy_traj = noisy_traj.clone().cpu().numpy()
+            # for i in range(10):
+            #     plt.plot(vnoisy_traj[0,1,i,:],vnoisy_traj[0,0,i,:])
+            # plt.show()
+
+            # Predict the noise residual
+            # print(noisy_traj.shape, obsgoal_cond.shape)
+            noise_pred = model("noise_pred_net", sample=noisy_traj, timestep=timesteps, global_cond=obsgoal_cond)
+            # print(noise_pred.mean(),noise.mean())
+
+            def action_reduce(unreduced_loss: torch.Tensor):
+                # Reduce over non-batch dimensions to get loss per batch element
+                while unreduced_loss.dim() > 1:
+                    unreduced_loss = unreduced_loss.mean(dim=-1)
+                return unreduced_loss.mean()
+
+            # L2 loss
+            diffusion_loss = action_reduce(F.mse_loss(noise_pred, noise, reduction="none"))
+            # diffusion_loss = F.mse_loss(noise_pred, noise)
+            # print(diffusion_loss, otherloss)
+            loss = 1.0 * diffusion_loss
+            print(loss)
+            losses.append(loss.item())
+            # Optimize
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+            # scheduler.step()
+
+            if i % 500 == 0:
+                model.eval()
+                with torch.no_grad():
+                    diffusion_output = model_output(
+                        model,
+                        noise_scheduler,
+                        costmap[0].unsqueeze(0).detach(),
+                        64,
+                        2,
+                        10,
+                        device,
+                    )
+                    # print(diffusion_output.shape)
+                    # diffusion_output = diffusion_output.permute(0,2,3,1)
+                    # diffusion_output = torch.flatten(diffusion_output,end_dim=1).cpu().numpy()
+                    diffusion_output = diffusion_output.cpu().numpy()
+                    for i in range(len(diffusion_output)):
+                        plt.plot(diffusion_output[i,:,0],diffusion_output[i,:,1])
+                    plt.show()
+                    # print(diffusion_output.shape)
+                model.train()
+
+
+        plt.plot(losses)
+        plt.show()
+
+        with torch.no_grad():
+            diffusion_output = model_output(
+                model,
+                noise_scheduler,
+                costmap[0].unsqueeze(0).detach(),
+                64,
+                2,
+                10,
+                device,
+            )
+            # print(diffusion_output.shape)
+            # diffusion_output = diffusion_output.permute(0,2,3,1)
+            # diffusion_output = torch.flatten(diffusion_output,end_dim=1).cpu().numpy()
+            diffusion_output = diffusion_output.cpu().numpy()
+            for i in range(len(diffusion_output)):
+                plt.plot(diffusion_output[i,:,0],diffusion_output[i,:,1])
+            plt.show()
+
+        # Total loss
+        # loss = alpha * dist_loss + (1-alpha) * diffusion_loss
+
+
         #
         # noise = torch.randn(action.shape, device=device)
         # timesteps = torch.randint(
@@ -313,24 +519,9 @@ def main(config):
         # noisy_action = noise_scheduler.add_noise(
         #     action, noise, timesteps)
         #
-        # noise_pred = model("noise_pred_net", sample=noisy_action, timestep=timesteps, global_cond=obsgoal_cond)
-        # print(noise_pred.shape)
-
-        action = torch.randn((B,2,10,50), device=device)
-
-        noise = torch.randn(action.shape, device=device)
-        timesteps = torch.randint(
-            0, noise_scheduler.config.num_train_timesteps,
-            (B,), device=device
-        ).long()
-
-        # Add noise to the clean images according to the noise magnitude at each diffusion iteration
-        noisy_action = noise_scheduler.add_noise(
-            action, noise, timesteps)
-
-        # print(obsgoal_cond.shape)
-
-        noise_pred = twod_noise_pred_net(sample=noisy_action, timestep=timesteps, encoder_hidden_states=obsgoal_cond.unsqueeze(0))
+        # # print(obsgoal_cond.shape)
+        #
+        # noise_pred = model("noise_pred_net",sample=noisy_action, timestep=timesteps, global_cond=obsgoal_cond.unsqueeze(0))
 
         print('here')
 

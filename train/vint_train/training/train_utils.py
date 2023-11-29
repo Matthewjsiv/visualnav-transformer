@@ -252,7 +252,7 @@ def train(
         obs_image = torch.cat(obs_images, dim=1)
 
         viz_goal_image = TF.resize(goal_image, VISUALIZATION_IMAGE_SIZE)
-        
+
         goal_image = transform(goal_image).to(device)
         model_outputs = model(obs_image, goal_image)
 
@@ -261,7 +261,7 @@ def train(
         action_mask = action_mask.to(device)
 
         optimizer.zero_grad()
-      
+
         dist_pred, action_pred = model_outputs
 
         losses = _compute_losses(
@@ -550,7 +550,7 @@ def train_nomad(
         dataloader: dataloader for training
         transform: transform to use
         device: device to use
-        noise_scheduler: noise scheduler to train with 
+        noise_scheduler: noise scheduler to train with
         project_folder: folder to save images to
         epoch: current epoch
         alpha: weight of action loss
@@ -559,7 +559,6 @@ def train_nomad(
         num_images_log: number of images to log
         use_wandb: whether to use wandb
     """
-    goal_mask_prob = torch.clip(torch.tensor(goal_mask_prob), 0, 1)
     model.train()
     num_batches = len(dataloader)
 
@@ -589,16 +588,8 @@ def train_nomad(
     }
     with tqdm.tqdm(dataloader, desc="Train Batch", leave=False) as tepoch:
         for i, data in enumerate(tepoch):
-            (
-                obs_image, 
-                goal_image,
-                actions,
-                distance,
-                goal_pos,
-                dataset_idx,
-                action_mask, 
-            ) = data
-            
+            (obs_image, actions) = data
+
             obs_images = torch.split(obs_image, 3, dim=1)
             batch_viz_obs_images = TF.resize(obs_images[-1], VISUALIZATION_IMAGE_SIZE[::-1])
             batch_viz_goal_images = TF.resize(goal_image, VISUALIZATION_IMAGE_SIZE[::-1])
@@ -612,7 +603,7 @@ def train_nomad(
             # Generate random goal mask
             goal_mask = (torch.rand((B,)) < goal_mask_prob).long().to(device)
             obsgoal_cond = model("vision_encoder", obs_img=batch_obs_images, goal_img=batch_goal_images, input_goal_mask=goal_mask)
-            
+
             # Get distance label
             distance = distance.float().to(device)
 
@@ -638,7 +629,7 @@ def train_nomad(
             # Add noise to the clean images according to the noise magnitude at each diffusion iteration
             noisy_action = noise_scheduler.add_noise(
                 naction, noise, timesteps)
-            
+
             # Predict the noise residual
             noise_pred = model("noise_pred_net", sample=noisy_action, timestep=timesteps, global_cond=obsgoal_cond)
 
@@ -651,7 +642,7 @@ def train_nomad(
 
             # L2 loss
             diffusion_loss = action_reduce(F.mse_loss(noise_pred, noise, reduction="none"))
-            
+
             # Total loss
             loss = alpha * dist_loss + (1-alpha) * diffusion_loss
 
@@ -682,12 +673,12 @@ def train_nomad(
                             device,
                             action_mask.to(device),
                         )
-                
+
                 for key, value in losses.items():
                     if key in loggers:
                         logger = loggers[key]
                         logger.log_data(value.item())
-            
+
                 data_log = {}
                 for key, logger in loggers.items():
                     data_log[logger.full_name()] = logger.latest()
@@ -717,6 +708,185 @@ def train_nomad(
                     use_wandb,
                 )
 
+def train_vanilla_nomad(
+    model: nn.Module,
+    ema_model: EMAModel,
+    optimizer: Adam,
+    dataloader: DataLoader,
+    transform: transforms,
+    device: torch.device,
+    noise_scheduler: DDPMScheduler,
+    goal_mask_prob: float,
+    project_folder: str,
+    epoch: int,
+    alpha: float = 1e-4,
+    print_log_freq: int = 100,
+    wandb_log_freq: int = 10,
+    image_log_freq: int = 1000,
+    num_images_log: int = 8,
+    use_wandb: bool = True,
+):
+    """
+    Train the model for one epoch.
+
+    Args:
+        model: model to train
+        ema_model: exponential moving average model
+        optimizer: optimizer to use
+        dataloader: dataloader for training
+        transform: transform to use
+        device: device to use
+        noise_scheduler: noise scheduler to train with
+        project_folder: folder to save images to
+        epoch: current epoch
+        alpha: weight of action loss
+        print_log_freq: how often to print loss
+        image_log_freq: how often to log images
+        num_images_log: number of images to log
+        use_wandb: whether to use wandb
+    """
+    model.train()
+    num_batches = len(dataloader)
+
+    # uc_action_loss_logger = Logger("uc_action_loss", "train", window_size=print_log_freq)
+    # uc_action_waypts_cos_sim_logger = Logger(
+    #     "uc_action_waypts_cos_sim", "train", window_size=print_log_freq
+    # )
+    # uc_multi_action_waypts_cos_sim_logger = Logger(
+    #     "uc_multi_action_waypts_cos_sim", "train", window_size=print_log_freq
+    # )
+    # gc_dist_loss_logger = Logger("gc_dist_loss", "train", window_size=print_log_freq)
+    # gc_action_loss_logger = Logger("gc_action_loss", "train", window_size=print_log_freq)
+    # gc_action_waypts_cos_sim_logger = Logger(
+    #     "gc_action_waypts_cos_sim", "train", window_size=print_log_freq
+    # )
+    # gc_multi_action_waypts_cos_sim_logger = Logger(
+    #     "gc_multi_action_waypts_cos_sim", "train", window_size=print_log_freq
+    # )
+    # loggers = {
+    #     "uc_action_loss": uc_action_loss_logger,
+    #     "uc_action_waypts_cos_sim": uc_action_waypts_cos_sim_logger,
+    #     "uc_multi_action_waypts_cos_sim": uc_multi_action_waypts_cos_sim_logger,
+    #     "gc_dist_loss": gc_dist_loss_logger,
+    #     "gc_action_loss": gc_action_loss_logger,
+    #     "gc_action_waypts_cos_sim": gc_action_waypts_cos_sim_logger,
+    #     "gc_multi_action_waypts_cos_sim": gc_multi_action_waypts_cos_sim_logger,
+    # }
+    with tqdm.tqdm(dataloader, desc="Train Batch", leave=False) as tepoch:
+        for i, data in enumerate(tepoch):
+            (costmap, traj) = data
+
+            # obs_images = torch.split(obs_image, 3, dim=1)
+            # batch_viz_obs_images = TF.resize(obs_images[-1], VISUALIZATION_IMAGE_SIZE[::-1])
+            # batch_viz_goal_images = TF.resize(goal_image, VISUALIZATION_IMAGE_SIZE[::-1])
+            # batch_obs_images = [transform(obs) for obs in obs_images]
+            # batch_obs_images = torch.cat(batch_obs_images, dim=1).to(device)
+            # batch_goal_images = transform(goal_image).to(device)
+            # action_mask = action_mask.to(device)
+
+            B = traj.shape[0]
+
+            obsgoal_cond = model("vision_encoder", obs_img=costmap)
+
+            # Sample noise to add to actions
+            noise = torch.randn(traj.shape, device=device)
+            # print(noise.dtype)
+            # Sample a diffusion iteration for each data point
+            timesteps = torch.randint(
+                0, noise_scheduler.config.num_train_timesteps - 7,
+                (B,), device=device
+            ).long()
+
+            # Add noise to the clean images according to the noise magnitude at each diffusion iteration
+            noisy_traj = noise_scheduler.add_noise(
+                traj, noise, timesteps)
+
+            # print(traj.shape, noisy_traj.shape)
+
+            vnoisy_traj = noisy_traj.clone().cpu().numpy()
+            # for i in range(10):
+            #     plt.plot(vnoisy_traj[0,1,i,:],vnoisy_traj[0,0,i,:])
+            # plt.show()
+
+            # Predict the noise residual
+            obsgoal_cond = obsgoal_cond.unsqueeze(1)
+            noise_pred = model("noise_pred_net", sample=noisy_traj, timestep=timesteps, global_cond=obsgoal_cond).sample
+            # print(noise_pred.mean(),noise.mean())
+
+            def action_reduce(unreduced_loss: torch.Tensor):
+                # Reduce over non-batch dimensions to get loss per batch element
+                while unreduced_loss.dim() > 1:
+                    unreduced_loss = unreduced_loss.mean(dim=-1)
+                return unreduced_loss.mean()
+
+            # L2 loss
+            diffusion_loss = action_reduce(F.mse_loss(noise_pred, noise, reduction="none"))
+            # diffusion_loss = F.mse_loss(noise_pred, noise)
+            # print(diffusion_loss, otherloss)
+            loss = 1.0 * diffusion_loss
+            # print(loss)
+            # losses.append(loss.item())
+            # Optimize
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+
+            # Update Exponential Moving Average of the model weights
+            ema_model.step(model)
+
+            # Logging
+            loss_cpu = loss.item()
+            tepoch.set_postfix(loss=loss_cpu)
+            # wandb.log({"total_loss": loss_cpu})
+            # wandb.log({"dist_loss": dist_loss.item()})
+            # wandb.log({"diffusion_loss": diffusion_loss.item()})
+
+
+            if i % print_log_freq == 0:
+                losses = _compute_losses_nomad(
+                            ema_model.averaged_model,
+                            noise_scheduler,
+                            batch_obs_images,
+                            batch_goal_images,
+                            distance.to(device),
+                            actions.to(device),
+                            device,
+                            action_mask.to(device),
+                        )
+
+                for key, value in losses.items():
+                    if key in loggers:
+                        logger = loggers[key]
+                        logger.log_data(value.item())
+
+                data_log = {}
+                for key, logger in loggers.items():
+                    data_log[logger.full_name()] = logger.latest()
+                    if i % print_log_freq == 0 and print_log_freq != 0:
+                        print(f"(epoch {epoch}) (batch {i}/{num_batches - 1}) {logger.display()}")
+
+                if use_wandb and i % wandb_log_freq == 0 and wandb_log_freq != 0:
+                    wandb.log(data_log, commit=True)
+
+            if image_log_freq != 0 and i % image_log_freq == 0:
+                visualize_diffusion_action_distribution(
+                    ema_model.averaged_model,
+                    noise_scheduler,
+                    batch_obs_images,
+                    batch_goal_images,
+                    batch_viz_obs_images,
+                    batch_viz_goal_images,
+                    actions,
+                    distance,
+                    goal_pos,
+                    device,
+                    "train",
+                    project_folder,
+                    epoch,
+                    num_images_log,
+                    30,
+                    use_wandb,
+                )
 
 def evaluate_nomad(
     eval_type: str,
@@ -744,10 +914,10 @@ def evaluate_nomad(
         dataloader (DataLoader): dataloader for eval
         transform (transforms): transform to apply to images
         device (torch.device): device to use for evaluation
-        noise_scheduler: noise scheduler to evaluate with 
+        noise_scheduler: noise scheduler to evaluate with
         project_folder (string): path to project folder
         epoch (int): current epoch
-        print_log_freq (int): how often to print logs 
+        print_log_freq (int): how often to print logs
         wandb_log_freq (int): how often to log to wandb
         image_log_freq (int): how often to log images
         alpha (float): weight for action loss
@@ -758,7 +928,7 @@ def evaluate_nomad(
     goal_mask_prob = torch.clip(torch.tensor(goal_mask_prob), 0, 1)
     ema_model = ema_model.averaged_model
     ema_model.eval()
-    
+
     num_batches = len(dataloader)
 
     uc_action_loss_logger = Logger("uc_action_loss", eval_type, window_size=print_log_freq)
@@ -788,14 +958,14 @@ def evaluate_nomad(
     num_batches = max(int(num_batches * eval_fraction), 1)
 
     with tqdm.tqdm(
-        itertools.islice(dataloader, num_batches), 
-        total=num_batches, 
-        dynamic_ncols=True, 
-        desc=f"Evaluating {eval_type} for epoch {epoch}", 
+        itertools.islice(dataloader, num_batches),
+        total=num_batches,
+        dynamic_ncols=True,
+        desc=f"Evaluating {eval_type} for epoch {epoch}",
         leave=False) as tepoch:
         for i, data in enumerate(tepoch):
             (
-                obs_image, 
+                obs_image,
                 goal_image,
                 actions,
                 distance,
@@ -803,7 +973,7 @@ def evaluate_nomad(
                 dataset_idx,
                 action_mask,
             ) = data
-            
+
             obs_images = torch.split(obs_image, 3, dim=1)
             batch_viz_obs_images = TF.resize(obs_images[-1], VISUALIZATION_IMAGE_SIZE[::-1])
             batch_viz_goal_images = TF.resize(goal_image, VISUALIZATION_IMAGE_SIZE[::-1])
@@ -848,24 +1018,24 @@ def evaluate_nomad(
             ### RANDOM MASK ERROR ###
             # Predict the noise residual
             rand_mask_noise_pred = ema_model("noise_pred_net", sample=noisy_actions, timestep=timesteps, global_cond=rand_mask_cond)
-            
+
             # L2 loss
             rand_mask_loss = nn.functional.mse_loss(rand_mask_noise_pred, noise)
-            
+
             ### NO MASK ERROR ###
             # Predict the noise residual
             no_mask_noise_pred = ema_model("noise_pred_net", sample=noisy_actions, timestep=timesteps, global_cond=obsgoal_cond)
-            
+
             # L2 loss
             no_mask_loss = nn.functional.mse_loss(no_mask_noise_pred, noise)
 
             ### GOAL MASK ERROR ###
             # predict the noise residual
             goal_mask_noise_pred = ema_model("noise_pred_net", sample=noisy_actions, timestep=timesteps, global_cond=goal_mask_cond)
-            
+
             # L2 loss
             goal_mask_loss = nn.functional.mse_loss(goal_mask_noise_pred, noise)
-            
+
             # Logging
             loss_cpu = rand_mask_loss.item()
             tepoch.set_postfix(loss=loss_cpu)
@@ -885,12 +1055,12 @@ def evaluate_nomad(
                             device,
                             action_mask.to(device),
                         )
-                
+
                 for key, value in losses.items():
                     if key in loggers:
                         logger = loggers[key]
                         logger.log_data(value.item())
-            
+
                 data_log = {}
                 for key, logger in loggers.items():
                     data_log[logger.full_name()] = logger.latest()
@@ -959,30 +1129,26 @@ def get_action(diffusion_output, action_stats=ACTION_STATS):
     actions = np.cumsum(ndeltas, axis=1)
     return from_numpy(actions).to(device)
 
-
 def model_output(
     model: nn.Module,
     noise_scheduler: DDPMScheduler,
     batch_obs_images: torch.Tensor,
-    batch_goal_images: torch.Tensor,
     pred_horizon: int,
     action_dim: int,
+    num_trajectories: int,
     num_samples: int,
     device: torch.device,
 ):
-    goal_mask = torch.ones((batch_goal_images.shape[0],)).long().to(device)
-    obs_cond = model("vision_encoder", obs_img=batch_obs_images, goal_img=batch_goal_images, input_goal_mask=goal_mask)
+
+    obs_cond = model("vision_encoder", obs_img=batch_obs_images)
     # obs_cond = obs_cond.flatten(start_dim=1)
+    obs_cond = obs_cond.unsqueeze(1)
+    # print(obs_cond.shape)
     obs_cond = obs_cond.repeat_interleave(num_samples, dim=0)
-
-    no_mask = torch.zeros((batch_goal_images.shape[0],)).long().to(device)
-    obsgoal_cond = model("vision_encoder", obs_img=batch_obs_images, goal_img=batch_goal_images, input_goal_mask=no_mask)
-    # obsgoal_cond = obsgoal_cond.flatten(start_dim=1)  
-    obsgoal_cond = obsgoal_cond.repeat_interleave(num_samples, dim=0)
-
+    # print(obs_cond.shape)
     # initialize action from Gaussian noise
     noisy_diffusion_output = torch.randn(
-        (len(obs_cond), pred_horizon, action_dim), device=device)
+        (len(obs_cond), action_dim, num_trajectories, pred_horizon), device=device)
     diffusion_output = noisy_diffusion_output
 
 
@@ -1002,37 +1168,82 @@ def model_output(
             sample=diffusion_output
         ).prev_sample
 
-    uc_actions = get_action(diffusion_output, ACTION_STATS)
+    return diffusion_output
 
-    # initialize action from Gaussian noise
-    noisy_diffusion_output = torch.randn(
-        (len(obs_cond), pred_horizon, action_dim), device=device)
-    diffusion_output = noisy_diffusion_output
 
-    for k in noise_scheduler.timesteps[:]:
-        # predict noise
-        noise_pred = model(
-            "noise_pred_net",
-            sample=diffusion_output,
-            timestep=k.unsqueeze(-1).repeat(diffusion_output.shape[0]).to(device),
-            global_cond=obsgoal_cond
-        )
-
-        # inverse diffusion step (remove noise)
-        diffusion_output = noise_scheduler.step(
-            model_output=noise_pred,
-            timestep=k,
-            sample=diffusion_output
-        ).prev_sample
-    obsgoal_cond = obsgoal_cond.flatten(start_dim=1)
-    gc_actions = get_action(diffusion_output, ACTION_STATS)
-    gc_distance = model("dist_pred_net", obsgoal_cond=obsgoal_cond)
-
-    return {
-        'uc_actions': uc_actions,
-        'gc_actions': gc_actions,
-        'gc_distance': gc_distance,
-    }
+# def model_output(
+#     model: nn.Module,
+#     noise_scheduler: DDPMScheduler,
+#     batch_obs_images: torch.Tensor,
+#     batch_goal_images: torch.Tensor,
+#     pred_horizon: int,
+#     action_dim: int,
+#     num_samples: int,
+#     device: torch.device,
+# ):
+#     goal_mask = torch.ones((batch_goal_images.shape[0],)).long().to(device)
+#     obs_cond = model("vision_encoder", obs_img=batch_obs_images, goal_img=batch_goal_images, input_goal_mask=goal_mask)
+#     # obs_cond = obs_cond.flatten(start_dim=1)
+#     obs_cond = obs_cond.repeat_interleave(num_samples, dim=0)
+#
+#     no_mask = torch.zeros((batch_goal_images.shape[0],)).long().to(device)
+#     obsgoal_cond = model("vision_encoder", obs_img=batch_obs_images, goal_img=batch_goal_images, input_goal_mask=no_mask)
+#     # obsgoal_cond = obsgoal_cond.flatten(start_dim=1)
+#     obsgoal_cond = obsgoal_cond.repeat_interleave(num_samples, dim=0)
+#
+#     # initialize action from Gaussian noise
+#     noisy_diffusion_output = torch.randn(
+#         (len(obs_cond), pred_horizon, action_dim), device=device)
+#     diffusion_output = noisy_diffusion_output
+#
+#
+#     for k in noise_scheduler.timesteps[:]:
+#         # predict noise
+#         noise_pred = model(
+#             "noise_pred_net",
+#             sample=diffusion_output,
+#             timestep=k.unsqueeze(-1).repeat(diffusion_output.shape[0]).to(device),
+#             global_cond=obs_cond
+#         )
+#
+#         # inverse diffusion step (remove noise)
+#         diffusion_output = noise_scheduler.step(
+#             model_output=noise_pred,
+#             timestep=k,
+#             sample=diffusion_output
+#         ).prev_sample
+#
+#     uc_actions = get_action(diffusion_output, ACTION_STATS)
+#
+#     # initialize action from Gaussian noise
+#     noisy_diffusion_output = torch.randn(
+#         (len(obs_cond), pred_horizon, action_dim), device=device)
+#     diffusion_output = noisy_diffusion_output
+#
+#     for k in noise_scheduler.timesteps[:]:
+#         # predict noise
+#         noise_pred = model(
+#             "noise_pred_net",
+#             sample=diffusion_output,
+#             timestep=k.unsqueeze(-1).repeat(diffusion_output.shape[0]).to(device),
+#             global_cond=obsgoal_cond
+#         )
+#
+#         # inverse diffusion step (remove noise)
+#         diffusion_output = noise_scheduler.step(
+#             model_output=noise_pred,
+#             timestep=k,
+#             sample=diffusion_output
+#         ).prev_sample
+#     obsgoal_cond = obsgoal_cond.flatten(start_dim=1)
+#     gc_actions = get_action(diffusion_output, ACTION_STATS)
+#     gc_distance = model("dist_pred_net", obsgoal_cond=obsgoal_cond)
+#
+#     return {
+#         'uc_actions': uc_actions,
+#         'gc_actions': gc_actions,
+#         'gc_distance': gc_distance,
+#     }
 
 
 def visualize_diffusion_action_distribution(
@@ -1072,7 +1283,7 @@ def visualize_diffusion_action_distribution(
     batch_goal_images = batch_goal_images[:num_images_log]
     batch_action_label = batch_action_label[:num_images_log]
     batch_goal_pos = batch_goal_pos[:num_images_log]
-    
+
     wandb_list = []
 
     pred_horizon = batch_action_label.shape[1]
@@ -1148,9 +1359,9 @@ def visualize_diffusion_action_distribution(
             point_labels=None,
             quiver_freq=0,
             traj_alphas=traj_alphas,
-            point_alphas=point_alphas, 
+            point_alphas=point_alphas,
         )
-        
+
         obs_image = to_numpy(batch_viz_obs_images[i])
         goal_image = to_numpy(batch_viz_goal_images[i])
         # move channel to last dimension
@@ -1163,7 +1374,7 @@ def visualize_diffusion_action_distribution(
         ax[0].set_title(f"diffusion action predictions")
         ax[1].set_title(f"observation")
         ax[2].set_title(f"goal: label={np_distance_labels[i]} gc_dist={gc_distances_avg[i]:.2f}±{gc_distances_std[i]:.2f}")
-        
+
         # make the plot large
         fig.set_size_inches(18.5, 10.5)
 
@@ -1173,5 +1384,3 @@ def visualize_diffusion_action_distribution(
         plt.close(fig)
     if len(wandb_list) > 0 and use_wandb:
         wandb.log({f"{eval_type}_action_samples": wandb_list}, commit=False)
-
-

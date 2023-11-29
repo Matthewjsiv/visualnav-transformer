@@ -147,7 +147,7 @@ def train_eval_loop(
 def train_eval_loop_nomad(
     train_model: bool,
     model: nn.Module,
-    optimizer: Adam, 
+    optimizer: Adam,
     lr_scheduler: torch.optim.lr_scheduler._LRScheduler,
     noise_scheduler: DDPMScheduler,
     train_loader: DataLoader,
@@ -194,13 +194,13 @@ def train_eval_loop_nomad(
     """
     latest_path = os.path.join(project_folder, f"latest.pth")
     ema_model = EMAModel(model=model,power=0.75)
-    
+
     for epoch in range(current_epoch, current_epoch + epochs):
         if train_model:
             print(
             f"Start ViNT DP Training Epoch {epoch}/{current_epoch + epochs - 1}"
             )
-            train_nomad(
+            train_vanilla_nomad(
                 model=model,
                 ema_model=ema_model,
                 optimizer=optimizer,
@@ -241,7 +241,7 @@ def train_eval_loop_nomad(
         torch.save(lr_scheduler.state_dict(), latest_scheduler_path)
 
 
-        if (epoch + 1) % eval_freq == 0: 
+        if (epoch + 1) % eval_freq == 0:
             for dataset_type in test_dataloaders:
                 print(
                     f"Start {dataset_type} ViNT DP Testing Epoch {epoch}/{current_epoch + epochs - 1}"
@@ -277,7 +277,7 @@ def train_eval_loop_nomad(
             "lr": optimizer.param_groups[0]["lr"],
         }, commit=False)
 
-        
+
     # Flush the last set of eval logs
     wandb.log({})
     print()

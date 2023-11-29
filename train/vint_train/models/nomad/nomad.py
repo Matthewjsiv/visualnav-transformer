@@ -47,6 +47,8 @@ class Vanilla_NoMaD(nn.Module):
             output = self.vision_encoder(kwargs["obs_img"])
         elif func_name == "noise_pred_net":
             output = self.noise_pred_net(sample=kwargs["sample"], timestep=kwargs["timestep"], global_cond=kwargs["global_cond"])
+            # output = self.noise_pred_net(sample=kwargs["sample"], timestep=kwargs["timestep"], encoder_hidden_states=kwargs["global_cond"])
+
         elif func_name == "dist_pred_net":
             output = self.dist_pred_net(kwargs["obsgoal_cond"])
         else:

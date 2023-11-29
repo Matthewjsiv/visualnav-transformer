@@ -5,17 +5,20 @@ import numpy as np
 import yaml
 import time
 import pdb
-
+import matplotlib.pyplot as plt
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, ConcatDataset
 from torch.optim import Adam, AdamW
+import torch.nn.functional as F
+
 from torchvision import transforms
 import torch.backends.cudnn as cudnn
 from warmup_scheduler import GradualWarmupScheduler
 
 from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
 from diffusers.optimization import get_scheduler
+from diffusers.models.unet_2d_condition import UNet2DConditionModel
 
 """
 IMPORT YOUR MODEL HERE
@@ -23,19 +26,63 @@ IMPORT YOUR MODEL HERE
 from vint_train.models.gnm.gnm import GNM
 from vint_train.models.vint.vint import ViNT
 from vint_train.models.vint.vit import ViT
-from vint_train.models.nomad.nomad import NoMaD, DenseNetwork
+from vint_train.models.nomad.nomad import Vanilla_NoMaD, NoMaD, DenseNetwork
 from vint_train.models.nomad.nomad_vint import NoMaD_ViNT, replace_bn_with_gn, Vanilla_NoMaD_ViNT
 from diffusion_policy.model.diffusion.conditional_unet1d import ConditionalUnet1D
 
 
 from vint_train.data.vint_dataset import ViNT_Dataset
-from vint_train.data.WaypointDataset import TrajLibDataset
-
 from vint_train.training.train_eval_loop import (
     train_eval_loop,
     train_eval_loop_nomad,
     load_model,
 )
+
+def model_output(
+    model: nn.Module,
+    noise_scheduler: DDPMScheduler,
+    batch_obs_images: torch.Tensor,
+    pred_horizon: int,
+    action_dim: int,
+    num_trajectories: int,
+    num_samples: int,
+    device: torch.device,
+):
+
+    # print(batch_obs_images.requires_grad)
+    obs_cond = model("vision_encoder", obs_img=batch_obs_images)
+    # obs_cond = obs_cond.flatten(start_dim=1)
+    # print(obs_cond.requires_grad)
+    obs_cond = obs_cond.unsqueeze(1)
+
+    # print(obs_cond.shape)
+    obs_cond = obs_cond.repeat_interleave(num_samples, dim=0)
+    # print(obs_cond.shape)
+    # initialize action from Gaussian noise
+    noisy_diffusion_output = torch.randn(
+        (len(obs_cond), action_dim, num_trajectories, pred_horizon), device=device)
+    diffusion_output = noisy_diffusion_output
+
+    # print(diffusion_output.shape)
+    # print(obs_cond.requires_grad, diffusion_output.requires_grad)
+    for k in noise_scheduler.timesteps[:]:
+        # predict noise
+        # print('here')
+        noise_pred = model(
+            "noise_pred_net",
+            sample=diffusion_output,
+            timestep=k.unsqueeze(-1).repeat(diffusion_output.shape[0]).to(device),
+            global_cond=obs_cond
+        ).sample
+
+        # inverse diffusion step (remove noise)
+        diffusion_output = noise_scheduler.step(
+            model_output=noise_pred,
+            timestep=k,
+            sample=diffusion_output
+        ).prev_sample
+
+    return diffusion_output
 
 
 def main(config):
@@ -75,43 +122,6 @@ def main(config):
     train_dataset = []
     test_dataloaders = {}
 
-    if "context_type" not in config:
-        config["context_type"] = "temporal"
-
-    if "clip_goals" not in config:
-        config["clip_goals"] = False
-
-    train_dataset = TrajLibDataset(config['dataset_path'], config['num_trajectories'], config['cost_threshold'], config['num_buckets'],visualize=False)
-
-    train_loader = DataLoader(
-        train_dataset,
-        batch_size=config["batch_size"],
-        shuffle=True,
-        num_workers=config["num_workers"],
-        drop_last=False,
-        persistent_workers=True,
-    )
-
-    if "eval_batch_size" not in config:
-        config["eval_batch_size"] = config["batch_size"]
-
-    for dataset_type, dataset in test_dataloaders.items():
-        test_dataloaders[dataset_type] = DataLoader(
-            dataset,
-            batch_size=config["eval_batch_size"],
-            shuffle=True,
-            num_workers=0,
-            drop_last=False,
-        )
-
-    test_dataloaders[0] = DataLoader(
-        train_dataset,
-        batch_size=config["batch_size"],
-        shuffle=True,
-        num_workers=config["num_workers"],
-        drop_last=False,
-        persistent_workers=True,
-    )
 
     # Create the model
     if config["model_type"] == "gnm":
@@ -145,7 +155,7 @@ def main(config):
             )
             vision_encoder = replace_bn_with_gn(vision_encoder)
         elif config["vision_encoder"] == "vanilla_nomad_vint":
-            vision_encoder = NoMaD_ViNT(
+            vision_encoder = Vanilla_NoMaD_ViNT(
                 obs_encoding_size=config["encoding_size"],
                 context_size=config["context_size"],
                 mha_num_attention_heads=config["mha_num_attention_heads"],
@@ -179,11 +189,19 @@ def main(config):
                 input_dim=2,
                 global_cond_dim=config["encoding_size"],
                 down_dims=config["down_dims"],
-                cond_predict_scale=config["cond_predict_scale"],
+                cond_predict_scale=config["cond_predict_scale"], kernel_size=3
             )
+
+        twod_noise_pred_net = UNet2DConditionModel(
+                sample_size=(10,50),
+                in_channels=2,
+                out_channels=2,
+                encoder_hid_dim=config["encoding_size"]
+            ).cuda()
+
         dist_pred_network = DenseNetwork(embedding_dim=config["encoding_size"])
 
-        model = NoMaD(
+        model = Vanilla_NoMaD(
             vision_encoder=vision_encoder,
             noise_pred_net=noise_pred_net,
             dist_pred_net=dist_pred_network,
@@ -205,10 +223,18 @@ def main(config):
         )
         vision_encoder = replace_bn_with_gn(vision_encoder)
 
+        # noise_pred_net = UNet2DConditionModel(
+        #         sample_size=(config["num_trajectories"],config["num_waypoints"]),
+        #         in_channels=2,
+        #         out_channels=2,
+        #         encoder_hid_dim=config["encoding_size"]
+        #     )
+
         noise_pred_net = UNet2DConditionModel(
                 sample_size=(config["num_trajectories"],config["num_waypoints"]),
                 in_channels=2,
                 out_channels=2,
+                block_out_channels=[32,64,128,256],
                 encoder_hid_dim=config["encoding_size"]
             )
 
@@ -226,6 +252,11 @@ def main(config):
             clip_sample=True,
             prediction_type='epsilon'
         )
+
+        # print(vision_encoder)
+        # print(')))))))))))))))))')
+        # print(noise_pred_net)
+
     else:
         raise ValueError(f"Model {config['model']} not supported")
 
@@ -330,29 +361,156 @@ def main(config):
             eval_fraction=config["eval_fraction"],
         )
     else:
-        train_eval_loop_nomad(
-            train_model=config["train"],
-            model=model,
-            optimizer=optimizer,
-            lr_scheduler=scheduler,
-            noise_scheduler=noise_scheduler,
-            train_loader=train_loader,
-            test_dataloaders=test_dataloaders,
-            transform=transform,
-            goal_mask_prob=config["goal_mask_prob"],
-            epochs=config["epochs"],
-            device=device,
-            project_folder=config["project_folder"],
-            print_log_freq=config["print_log_freq"],
-            wandb_log_freq=config["wandb_log_freq"],
-            image_log_freq=config["image_log_freq"],
-            num_images_log=config["num_images_log"],
-            current_epoch=current_epoch,
-            alpha=float(config["alpha"]),
-            use_wandb=config["use_wandb"],
-            eval_fraction=config["eval_fraction"],
-            eval_freq=config["eval_freq"],
-        )
+        # train_eval_loop_nomad(
+        #     train_model=config["train"],
+        #     model=model,
+        #     optimizer=optimizer,
+        #     lr_scheduler=scheduler,
+        #     noise_scheduler=noise_scheduler,
+        #     train_loader=train_loader,
+        #     test_dataloaders=test_dataloaders,
+        #     transform=transform,
+        #     goal_mask_prob=config["goal_mask_prob"],
+        #     epochs=config["epochs"],
+        #     device=device,
+        #     project_folder=config["project_folder"],
+        #     print_log_freq=config["print_log_freq"],
+        #     wandb_log_freq=config["wandb_log_freq"],
+        #     image_log_freq=config["image_log_freq"],
+        #     num_images_log=config["num_images_log"],
+        #     current_epoch=current_epoch,
+        #     alpha=float(config["alpha"]),
+        #     use_wandb=config["use_wandb"],
+        #     eval_fraction=config["eval_fraction"],
+        #     eval_freq=config["eval_freq"],
+        # )
+
+        B = 10
+        costmap = torch.rand((B,1,120,120)).cuda()
+        # TRAJ_LIB = np.load('../../traj_lib_testing/traj_lib.npy')[:,:,:2][::500][:10]
+        # #
+        # TRAJ_LIB = np.stack([TRAJ_LIB]*B)
+        # # for i in range(10):
+        # #     plt.plot(TRAJ_LIB[0,i,:,1],TRAJ_LIB[0,i,:,0])
+        # # plt.show()
+        # # print(TRAJ_LIB.shape)
+        # # traj = torch.randn((B,2,10,78), device=device)
+        # traj = torch.tensor(TRAJ_LIB,dtype=torch.float32).cuda().permute((0,3,1,2))
+        # print(traj.dtype)
+
+
+        # B = traj.shape[0]
+
+        losses = []
+        TRAJ_LIB = np.load('../../traj_lib_testing/traj_lib.npy')[:,:,:2][::500]
+        traj_ids = np.random.permutation(len(TRAJ_LIB))[:10]
+        for i in range(10):
+            plt.plot(TRAJ_LIB[i,:,0],TRAJ_LIB[i,:,1])
+        plt.show()
+
+        for i in range(1000):
+            #
+            lib = np.stack([TRAJ_LIB[traj_ids]]*B)
+            # for i in range(10):
+            #     plt.plot(TRAJ_LIB[0,i,:,1],TRAJ_LIB[0,i,:,0])
+            # plt.show()
+            # print(TRAJ_LIB.shape)
+            # traj = torch.randn((B,2,10,78), device=device)
+            traj = torch.tensor(lib,dtype=torch.float32).cuda().permute((0,3,1,2))/30
+            # print(traj.max())
+
+            # Generate random goal mask
+            obsgoal_cond = model("vision_encoder", obs_img=costmap)
+
+            # Sample noise to add to actions
+            noise = torch.randn(traj.shape, device=device)
+            # print(noise.shape)
+            # print(noise.dtype)
+            # Sample a diffusion iteration for each data point
+            timesteps = torch.randint(
+                0, noise_scheduler.config.num_train_timesteps - 7,
+                (B,), device=device
+            ).long()
+
+            # Add noise to the clean images according to the noise magnitude at each diffusion iteration
+            noisy_traj = noise_scheduler.add_noise(
+                traj, noise, timesteps)
+
+            # print(traj.shape, noisy_traj.shape)
+
+            vnoisy_traj = noisy_traj.clone().cpu().numpy()
+            # for i in range(10):
+            #     plt.plot(vnoisy_traj[0,1,i,:],vnoisy_traj[0,0,i,:])
+            # plt.show()
+
+            # Predict the noise residual
+            obsgoal_cond = obsgoal_cond.unsqueeze(1)
+            noise_pred = model("noise_pred_net", sample=noisy_traj, timestep=timesteps, global_cond=obsgoal_cond).sample
+            # print(noise_pred.mean(),noise.mean())
+
+            def action_reduce(unreduced_loss: torch.Tensor):
+                # Reduce over non-batch dimensions to get loss per batch element
+                while unreduced_loss.dim() > 1:
+                    unreduced_loss = unreduced_loss.mean(dim=-1)
+                return unreduced_loss.mean()
+
+            # L2 loss
+            diffusion_loss = action_reduce(F.mse_loss(noise_pred, noise, reduction="none"))
+            # diffusion_loss = F.mse_loss(noise_pred, noise)
+            # print(diffusion_loss, otherloss)
+            loss = 1.0 * diffusion_loss
+            print(loss)
+            losses.append(loss.item())
+            # Optimize
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+            # scheduler.step()
+
+            if i % 100 == 0:
+                model.eval()
+                with torch.no_grad():
+                    diffusion_output = model_output(
+                        model,
+                        noise_scheduler,
+                        costmap[0].unsqueeze(0).detach(),
+                        78,
+                        2,
+                        10,
+                        1,
+                        device,
+                    )
+                    diffusion_output = diffusion_output.permute(0,2,3,1)
+                    diffusion_output = torch.flatten(diffusion_output,end_dim=1).cpu().numpy()
+                    for i in range(10):
+                        plt.plot(diffusion_output[i,:,0],diffusion_output[i,:,1])
+                    plt.show()
+                    # print(diffusion_output.shape)
+                model.train()
+
+        # plt.plot(losses)
+        # plt.show()
+
+        # Total loss
+        # loss = alpha * dist_loss + (1-alpha) * diffusion_loss
+
+
+        #
+        # noise = torch.randn(action.shape, device=device)
+        # timesteps = torch.randint(
+        #     0, noise_scheduler.config.num_train_timesteps,
+        #     (B,), device=device
+        # ).long()
+        #
+        # # Add noise to the clean images according to the noise magnitude at each diffusion iteration
+        # noisy_action = noise_scheduler.add_noise(
+        #     action, noise, timesteps)
+        #
+        # # print(obsgoal_cond.shape)
+        #
+        # noise_pred = model("noise_pred_net",sample=noisy_action, timestep=timesteps, global_cond=obsgoal_cond.unsqueeze(0))
+
+        print('here')
 
     print("FINISHED TRAINING")
 
