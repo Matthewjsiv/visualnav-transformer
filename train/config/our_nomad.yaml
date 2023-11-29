@@ -2,18 +2,18 @@ project_name: nomad
 run_name: nomad
 
 # training setup
-use_wandb: False # set to false if you don't want to log to wandb
+use_wandb: True # set to false if you don't want to log to wandb
 train: True
-batch_size: 256
+batch_size: 16
 eval_batch_size: 1
-epochs: 100
+epochs: 101
 gpu_ids: [0]
-num_workers: 12
-lr: 1e-3
+num_workers: 4
+lr: 1e-4
 optimizer: adamw
 clipping: False
 max_norm: 1.
-# scheduler: "cosine"
+scheduler: "cosine"
 warmup: True
 warmup_epochs: 4
 cyclic_period: 10
@@ -34,16 +34,13 @@ mha_ff_dim_factor: 4
 down_dims: [64, 128, 256]
 
 # diffusion model params
-num_diffusion_iters: 10
+num_diffusion_iters: 15
 
 # mask
 goal_mask_prob: 0.5
 
 # normalization for the action space
 normalize: True
-
-num_waypoints: 64
-num_trajectories: 10
 
 # context
 context_type: temporal
@@ -63,12 +60,21 @@ len_traj_pred: 8
 learn_angle: False
 
 # dataset specific parameters
+# image_size: [96, 96] # width, height
+# dataset_path: '/home/matthew/Documents/robot_learning/path_diffusion/traj_lib_testing/context_mppi_pipe_1.pt'
+# traj_lib_path: '/home/matthew/Documents/robot_learning/path_diffusion/traj_lib_testing/traj_lib.npy'
+# num_waypoints: 64
+# num_trajectories: 18
+# cost_threshold: -6
+# num_buckets: 6
+
 image_size: [96, 96] # width, height
-dataset_path: '1.pt'
+dataset_path: '/home/matthew/Documents/robot_learning/path_diffusion/traj_lib_testing/context_mppi_pipe_1.pt'
+traj_lib_path: '/home/matthew/Documents/robot_learning/path_diffusion/traj_lib_testing/traj_lib.npy'
 num_waypoints: 64
-num_trajectories: 10
-cost_threshold: 18.5
-num_buckets: 3
+num_trajectories: 12
+cost_threshold: -6.8
+num_buckets: 6
 
 # logging stuff
 ## =0 turns off

@@ -31,6 +31,8 @@ from vint_train.models.nomad.nomad_vint import NoMaD_ViNT, replace_bn_with_gn, V
 from diffusion_policy.model.diffusion.conditional_unet1d import ConditionalUnet1D
 from vint_train.visualizing.visualize_utils import to_numpy, from_numpy
 
+from vint_train.data.WaypointDataset import TrajLibDataset
+
 
 from vint_train.data.vint_dataset import ViNT_Dataset
 from vint_train.training.train_eval_loop import (
@@ -128,7 +130,19 @@ def main(config):
     train_dataset = []
     test_dataloaders = {}
 
+    train_dataset = TrajLibDataset(config['dataset_path'],config['num_trajectories'], config['cost_threshold'], config['num_buckets'])
 
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=config["batch_size"],
+        shuffle=True,
+        num_workers=config["num_workers"],
+        drop_last=False,
+        persistent_workers=True,
+    )
+
+
+    print("initialized dataloader")
     # Create the model
     if config["model_type"] == "gnm":
         model = GNM(
@@ -366,143 +380,204 @@ def main(config):
             eval_fraction=config["eval_fraction"],
         )
     else:
-        # train_eval_loop_nomad(
-        #     train_model=config["train"],
-        #     model=model,
-        #     optimizer=optimizer,
-        #     lr_scheduler=scheduler,
-        #     noise_scheduler=noise_scheduler,
-        #     train_loader=train_loader,
-        #     test_dataloaders=test_dataloaders,
-        #     transform=transform,
-        #     goal_mask_prob=config["goal_mask_prob"],
-        #     epochs=config["epochs"],
-        #     device=device,
-        #     project_folder=config["project_folder"],
-        #     print_log_freq=config["print_log_freq"],
-        #     wandb_log_freq=config["wandb_log_freq"],
-        #     image_log_freq=config["image_log_freq"],
-        #     num_images_log=config["num_images_log"],
-        #     current_epoch=current_epoch,
-        #     alpha=float(config["alpha"]),
-        #     use_wandb=config["use_wandb"],
-        #     eval_fraction=config["eval_fraction"],
-        #     eval_freq=config["eval_freq"],
-        # )
+        train_eval_loop_nomad(
+            train_model=config["train"],
+            model=model,
+            optimizer=optimizer,
+            lr_scheduler=scheduler,
+            noise_scheduler=noise_scheduler,
+            train_loader=train_loader,
+            test_dataloaders=test_dataloaders,
+            transform=transform,
+            goal_mask_prob=config["goal_mask_prob"],
+            epochs=config["epochs"],
+            device=device,
+            project_folder=config["project_folder"],
+            print_log_freq=config["print_log_freq"],
+            wandb_log_freq=config["wandb_log_freq"],
+            image_log_freq=config["image_log_freq"],
+            num_images_log=config["num_images_log"],
+            current_epoch=current_epoch,
+            alpha=float(config["alpha"]),
+            use_wandb=config["use_wandb"],
+            eval_fraction=config["eval_fraction"],
+            eval_freq=config["eval_freq"],
+            config=config
+        )
 
-        B = 64
-        costmap = torch.rand((B,1,120,120)).cuda()
-        TRAJ_LIB = np.load('../../traj_lib_testing/traj_lib.npy')[:,:64,:2][::500][0]
-        #
-        plt.plot(TRAJ_LIB[:,0],TRAJ_LIB[:,1])
-        plt.show()
-        TRAJ_LIB = np.stack([TRAJ_LIB]*B)
-        # for i in range(10):
-        #     plt.plot(TRAJ_LIB[0,i,:,1],TRAJ_LIB[0,i,:,0])
+        # B = 64
+        # costmap = torch.rand((B,1,120,120)).cuda()
+        # TRAJ_LIB = np.load('../../traj_lib_testing/traj_lib.npy')[:,:64,:2][::500][0]
+        # #
+        # plt.plot(TRAJ_LIB[:,0],TRAJ_LIB[:,1])
         # plt.show()
-        # print(TRAJ_LIB.shape)
-        # traj = torch.randn((B,2,10,78), device=device)
-        # print(TRAJ_LIB.shape)
-        traj = torch.tensor(TRAJ_LIB,dtype=torch.float32).cuda()/30
-        # print(traj.dtype)
+        # TRAJ_LIB = np.stack([TRAJ_LIB]*B)
+        # # for i in range(10):
+        # #     plt.plot(TRAJ_LIB[0,i,:,1],TRAJ_LIB[0,i,:,0])
+        # # plt.show()
+        # # print(TRAJ_LIB.shape)
+        # # traj = torch.randn((B,2,10,78), device=device)
+        # # print(TRAJ_LIB.shape)
+        # traj = torch.tensor(TRAJ_LIB,dtype=torch.float32).cuda()/30
+        # # print(traj.dtype)
+        #
+        #
+        # B = traj.shape[0]
 
+        # losses = []
+        #
+        # # for i in range(1000):
+        # # print('starting training')
+        # # print(config['num_trajectories'])
+        # for epoch in range(800):
+        #     for i,sample in enumerate(train_loader):
+        #         # print(i,len(sample))
+        #         costmap,traj = sample
+        #         # print(traj.shape, costmap.shape)
+        #         costmap = costmap.cuda()
+        #         # costmap = costmap.repeat_interleave(config['num_trajectories'],dim=0)
+        #
+        #         traj = traj.type(torch.float32).cuda()
+        #         # traj = traj[:,np.random.choice(config['num_trajectories']),:config['num_waypoints'],:]/30
+        #         traj = torch.flatten(traj,end_dim=1)/30
+        #         traj = traj[:,:config['num_waypoints'],:]
+        #
+        #         # print(traj.shape, costmap.shape)
+        #         # print(costmap.shape, traj.shape)
+        #         # Generate random goal mask
+        #         obsgoal_cond = model("vision_encoder", obs_img=costmap)
+        #         obsgoal_cond = obsgoal_cond.repeat_interleave(config['num_trajectories'],dim=0)
+        #         # Sample noise to add to actions
+        #         noise = torch.randn(traj.shape, device=device)
+        #         # print(noise.dtype)
+        #         # Sample a diffusion iteration for each data point
+        #         B = len(traj)
+        #         timesteps = torch.randint(
+        #             0, noise_scheduler.config.num_train_timesteps,
+        #             (B,), device=device
+        #         ).long()
+        #
+        #         # Add noise to the clean images according to the noise magnitude at each diffusion iteration
+        #         noisy_traj = noise_scheduler.add_noise(
+        #             traj, noise, timesteps)
+        #
+        #         # print(traj.shape, noisy_traj.shape)
+        #
+        #         # vnoisy_traj = noisy_traj.clone().cpu().numpy()
+        #         # for i in range(10):
+        #         #     plt.plot(vnoisy_traj[0,1,i,:],vnoisy_traj[0,0,i,:])
+        #         # plt.show()
+        #
+        #         # Predict the noise residual
+        #         # print(noisy_traj.shape, obsgoal_cond.shape)
+        #         # print(noisy_traj.dtype, timesteps.dtype, obsgoal_cond.dtype)
+        #         noise_pred = model("noise_pred_net", sample=noisy_traj, timestep=timesteps, global_cond=obsgoal_cond)
+        #         # print(noise_pred.mean(),noise.mean())
+        #
+        #         def action_reduce(unreduced_loss: torch.Tensor):
+        #             # Reduce over non-batch dimensions to get loss per batch element
+        #             while unreduced_loss.dim() > 1:
+        #                 unreduced_loss = unreduced_loss.mean(dim=-1)
+        #             return unreduced_loss.mean()
+        #
+        #         # L2 loss
+        #         diffusion_loss = action_reduce(F.mse_loss(noise_pred, noise, reduction="none"))
+        #         # otherloss = F.mse_loss(noise_pred, noise)
+        #         # print(diffusion_loss, otherloss)
+        #
+        #
+        #         diffusion_output = model_output(
+        #             model,
+        #             noise_scheduler,
+        #             costmap[0].unsqueeze(0),
+        #             64,
+        #             2,
+        #             10,
+        #             device,
+        #         )
+        #
+        #         #TODO double check this is right, replace hardcoded with params
+        #         diffusion_output *= 30
+        #         # diffusion_output = diffusion_output.long()
+        #         res = 0.5
+        #         diffusion_output = ((diffusion_output - torch.tensor([-30., -30]).reshape(1, 1, 2).cuda()) / 0.5).long()
+        #         # print(diffusion_output.max(),diffusion_output.min())
+        #         diffusion_output[diffusion_output > 119] = 119
+        #         # print(diffusion_output.shape)
+        #         costs = costmap[0,0,diffusion_output[:,:,0],diffusion_output[:,:,1]]/20
+        #         # print(costs.shape)
+        #         costs = costs.sum(axis=1)
+        #         costs = F.relu(costs + (6+1.5)).mean()
+        #         costs *= .1
+        #         # print(costs.mean())
+        #
+        #         loss = diffusion_loss + costs
+        #         print(loss.item(), diffusion_loss.item(), costs.item())
+        #
+        #         losses.append(loss.item())
+        #         # Optimize
+        #         optimizer.zero_grad()
+        #         loss.backward()
+        #         optimizer.step()
+        #         # scheduler.step()
+        #
+        #
+        #
+        #     print(str(epoch) + '------------------------')
+        #     # if epoch % 25 == 0:
+        #     model.eval()
+        #     with torch.no_grad():
+        #         diffusion_output = model_output(
+        #             model,
+        #             noise_scheduler,
+        #             costmap[0].unsqueeze(0).detach(),
+        #             64,
+        #             2,
+        #             20,
+        #             device,
+        #         )
+        #         # print(diffusion_output.shape)
+        #         # diffusion_output = diffusion_output.permute(0,2,3,1)
+        #         # diffusion_output = torch.flatten(diffusion_output,end_dim=1).cpu().numpy()
+        #         diffusion_output = diffusion_output.cpu().numpy()*30
+        #         costmap = costmap[0,0,:,:].cpu().numpy()
+        #         plt.imshow(costmap,origin='lower',extent=[-30, 30, -30, 30])
+        #         for i in range(len(diffusion_output)):
+        #             plt.plot(diffusion_output[i,:,1],diffusion_output[i,:,0])
+        #         # plt.show()
+        #         plt.savefig(config["project_folder"] + '/' + str(epoch) + '_10.png')
+        #         plt.clf()
+        #
+        #         # plt.imshow(costmap,origin='lower',extent=[-30, 30, -30, 30])
+        #         # for i in range(len(diffusion_output)):
+        #         #     plt.plot(diffusion_output[i,:,0],diffusion_output[i,:,1])
+        #         # # plt.show()
+        #         # plt.savefig(config["project_folder"] + '/' + str(epoch) + '_01.png')
+        #         # plt.clf()
+        #         # print(diffusion_output.shape)
+        #     model.train()
+        #
+        #
+        # plt.plot(losses)
+        # plt.show()
 
-        B = traj.shape[0]
-
-        losses = []
-
-        for i in range(1000):
-            # print(traj)
-            # Generate random goal mask
-            obsgoal_cond = model("vision_encoder", obs_img=costmap)
-
-            # Sample noise to add to actions
-            noise = torch.randn(traj.shape, device=device)
-            # print(noise.dtype)
-            # Sample a diffusion iteration for each data point
-            timesteps = torch.randint(
-                0, noise_scheduler.config.num_train_timesteps,
-                (B,), device=device
-            ).long()
-
-            # Add noise to the clean images according to the noise magnitude at each diffusion iteration
-            noisy_traj = noise_scheduler.add_noise(
-                traj, noise, timesteps)
-
-            # print(traj.shape, noisy_traj.shape)
-
-            vnoisy_traj = noisy_traj.clone().cpu().numpy()
-            # for i in range(10):
-            #     plt.plot(vnoisy_traj[0,1,i,:],vnoisy_traj[0,0,i,:])
-            # plt.show()
-
-            # Predict the noise residual
-            # print(noisy_traj.shape, obsgoal_cond.shape)
-            noise_pred = model("noise_pred_net", sample=noisy_traj, timestep=timesteps, global_cond=obsgoal_cond)
-            # print(noise_pred.mean(),noise.mean())
-
-            def action_reduce(unreduced_loss: torch.Tensor):
-                # Reduce over non-batch dimensions to get loss per batch element
-                while unreduced_loss.dim() > 1:
-                    unreduced_loss = unreduced_loss.mean(dim=-1)
-                return unreduced_loss.mean()
-
-            # L2 loss
-            diffusion_loss = action_reduce(F.mse_loss(noise_pred, noise, reduction="none"))
-            # diffusion_loss = F.mse_loss(noise_pred, noise)
-            # print(diffusion_loss, otherloss)
-            loss = 1.0 * diffusion_loss
-            print(loss)
-            losses.append(loss.item())
-            # Optimize
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-            # scheduler.step()
-
-            if i % 500 == 0:
-                model.eval()
-                with torch.no_grad():
-                    diffusion_output = model_output(
-                        model,
-                        noise_scheduler,
-                        costmap[0].unsqueeze(0).detach(),
-                        64,
-                        2,
-                        10,
-                        device,
-                    )
-                    # print(diffusion_output.shape)
-                    # diffusion_output = diffusion_output.permute(0,2,3,1)
-                    # diffusion_output = torch.flatten(diffusion_output,end_dim=1).cpu().numpy()
-                    diffusion_output = diffusion_output.cpu().numpy()
-                    for i in range(len(diffusion_output)):
-                        plt.plot(diffusion_output[i,:,0],diffusion_output[i,:,1])
-                    plt.show()
-                    # print(diffusion_output.shape)
-                model.train()
-
-
-        plt.plot(losses)
-        plt.show()
-
-        with torch.no_grad():
-            diffusion_output = model_output(
-                model,
-                noise_scheduler,
-                costmap[0].unsqueeze(0).detach(),
-                64,
-                2,
-                10,
-                device,
-            )
-            # print(diffusion_output.shape)
-            # diffusion_output = diffusion_output.permute(0,2,3,1)
-            # diffusion_output = torch.flatten(diffusion_output,end_dim=1).cpu().numpy()
-            diffusion_output = diffusion_output.cpu().numpy()
-            for i in range(len(diffusion_output)):
-                plt.plot(diffusion_output[i,:,0],diffusion_output[i,:,1])
-            plt.show()
+        # with torch.no_grad():
+        #     diffusion_output = model_output(
+        #         model,
+        #         noise_scheduler,
+        #         costmap[0].unsqueeze(0).detach(),
+        #         64,
+        #         2,
+        #         10,
+        #         device,
+        #     )
+        #     # print(diffusion_output.shape)
+        #     # diffusion_output = diffusion_output.permute(0,2,3,1)
+        #     # diffusion_output = torch.flatten(diffusion_output,end_dim=1).cpu().numpy()
+        #     diffusion_output = diffusion_output.cpu().numpy()
+        #     for i in range(len(diffusion_output)):
+        #         plt.plot(diffusion_output[i,:,0],diffusion_output[i,:,1])
+        #     plt.show()
 
         # Total loss
         # loss = alpha * dist_loss + (1-alpha) * diffusion_loss
@@ -562,16 +637,37 @@ if __name__ == "__main__":
             "project_folder"
         ],  # should error if dir already exists to avoid overwriting and old project
     )
+    print(config["project_folder"])
 
     if config["use_wandb"]:
         wandb.login()
+        # wandb.init(
+        #     project=config["project_name"],
+        #     settings=wandb.Settings(start_method="fork"),
+        #     entity="gnmv2", # TODO: change this to your wandb entity
+        # )
         wandb.init(
-            project=config["project_name"],
-            settings=wandb.Settings(start_method="fork"),
-            entity="gnmv2", # TODO: change this to your wandb entity
+            # set the wandb project where this run will be logged
+            project="path_diffusion",
+            # track hyperparameters and run metadata
+            # config={
+            # "learning_rate": LR,
+            # "architecture": PREFIX,
+            # "dataset": args.image_folder,
+            # "epochs": EPOCHS,
+            # "triplet": TRIPLET,
+            # "contrastive_mode": CONTRASTIVE,
+            # "batch size": BATCH_SIZE,
+            # "image size": IMAGE_SIZE,
+            # "distance threshold": int(DIST_THRESH),
+            # "margin": MARGIN,
+            # "layer number": LN,
+            # "ALPHA": VLAD_ALPHA,
+            # "N_CLUSTERS":N_CLUSTERS
+            # }
         )
         wandb.save(args.config, policy="now")  # save the config file
-        wandb.run.name = config["run_name"]
+        # wandb.run.name = config["run_name"]
         # update the wandb args with the training configurations
         if wandb.run:
             wandb.config.update(config)

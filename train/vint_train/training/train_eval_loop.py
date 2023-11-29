@@ -5,7 +5,7 @@ from typing import List, Optional, Dict
 from prettytable import PrettyTable
 
 from vint_train.training.train_utils import train, evaluate
-from vint_train.training.train_utils import train_nomad, evaluate_nomad
+from vint_train.training.train_utils import train_vanilla_nomad, evaluate_nomad
 
 import torch
 import torch.nn as nn
@@ -166,6 +166,7 @@ def train_eval_loop_nomad(
     use_wandb: bool = True,
     eval_fraction: float = 0.25,
     eval_freq: int = 1,
+    config: Dict = None
 ):
     """
     Train and evaluate the model for several epochs (vint or gnm models)
@@ -193,7 +194,10 @@ def train_eval_loop_nomad(
         eval_freq: frequency of evaluation
     """
     latest_path = os.path.join(project_folder, f"latest.pth")
-    ema_model = EMAModel(model=model,power=0.75)
+    ema_model = EMAModel(parameters=model.parameters(),power=0.75)
+
+    if lr_scheduler is not None:
+        lr_scheduler.step()
 
     for epoch in range(current_epoch, current_epoch + epochs):
         if train_model:
@@ -217,55 +221,56 @@ def train_eval_loop_nomad(
                 num_images_log=num_images_log,
                 use_wandb=use_wandb,
                 alpha=alpha,
+                config=config
             )
-            lr_scheduler.step()
 
-        numbered_path = os.path.join(project_folder, f"ema_{epoch}.pth")
-        torch.save(ema_model.averaged_model.state_dict(), numbered_path)
-        numbered_path = os.path.join(project_folder, f"ema_latest.pth")
-        print(f"Saved EMA model to {numbered_path}")
+        if epoch % 10 == 0:
+            numbered_path = os.path.join(project_folder, f"ema_{epoch}.pth")
+            torch.save(ema_model.state_dict(), numbered_path)
+            numbered_path = os.path.join(project_folder, f"ema_latest.pth")
+            print(f"Saved EMA model to {numbered_path}")
 
-        numbered_path = os.path.join(project_folder, f"{epoch}.pth")
-        torch.save(model.state_dict(), numbered_path)
-        torch.save(model.state_dict(), latest_path)
-        print(f"Saved model to {numbered_path}")
+            numbered_path = os.path.join(project_folder, f"{epoch}.pth")
+            torch.save(model.state_dict(), numbered_path)
+            torch.save(model.state_dict(), latest_path)
+            print(f"Saved model to {numbered_path}")
 
-        # save optimizer
-        numbered_path = os.path.join(project_folder, f"optimizer_{epoch}.pth")
-        latest_optimizer_path = os.path.join(project_folder, f"optimizer_latest.pth")
-        torch.save(optimizer.state_dict(), latest_optimizer_path)
+            # save optimizer
+            numbered_path = os.path.join(project_folder, f"optimizer_{epoch}.pth")
+            latest_optimizer_path = os.path.join(project_folder, f"optimizer_latest.pth")
+            torch.save(optimizer.state_dict(), latest_optimizer_path)
 
-        # save scheduler
-        numbered_path = os.path.join(project_folder, f"scheduler_{epoch}.pth")
-        latest_scheduler_path = os.path.join(project_folder, f"scheduler_latest.pth")
-        torch.save(lr_scheduler.state_dict(), latest_scheduler_path)
+            # save scheduler
+            numbered_path = os.path.join(project_folder, f"scheduler_{epoch}.pth")
+            latest_scheduler_path = os.path.join(project_folder, f"scheduler_latest.pth")
+            torch.save(lr_scheduler.state_dict(), latest_scheduler_path)
 
 
-        if (epoch + 1) % eval_freq == 0:
-            for dataset_type in test_dataloaders:
-                print(
-                    f"Start {dataset_type} ViNT DP Testing Epoch {epoch}/{current_epoch + epochs - 1}"
-                )
-                loader = test_dataloaders[dataset_type]
-                evaluate_nomad(
-                    eval_type=dataset_type,
-                    ema_model=ema_model,
-                    dataloader=loader,
-                    transform=transform,
-                    device=device,
-                    noise_scheduler=noise_scheduler,
-                    goal_mask_prob=goal_mask_prob,
-                    project_folder=project_folder,
-                    epoch=epoch,
-                    print_log_freq=print_log_freq,
-                    num_images_log=num_images_log,
-                    wandb_log_freq=wandb_log_freq,
-                    use_wandb=use_wandb,
-                    eval_fraction=eval_fraction,
-                )
-        wandb.log({
-            "lr": optimizer.param_groups[0]["lr"],
-        }, commit=False)
+        # if (epoch + 1) % eval_freq == 0:
+        #     for dataset_type in test_dataloaders:
+        #         print(
+        #             f"Start {dataset_type} ViNT DP Testing Epoch {epoch}/{current_epoch + epochs - 1}"
+        #         )
+        #         loader = test_dataloaders[dataset_type]
+        #         evaluate_nomad(
+        #             eval_type=dataset_type,
+        #             ema_model=ema_model,
+        #             dataloader=loader,
+        #             transform=transform,
+        #             device=device,
+        #             noise_scheduler=noise_scheduler,
+        #             goal_mask_prob=goal_mask_prob,
+        #             project_folder=project_folder,
+        #             epoch=epoch,
+        #             print_log_freq=print_log_freq,
+        #             num_images_log=num_images_log,
+        #             wandb_log_freq=wandb_log_freq,
+        #             use_wandb=use_wandb,
+        #             eval_fraction=eval_fraction,
+        #         )
+        # wandb.log({
+        #     "lr": optimizer.param_groups[0]["lr"],
+        # }, commit=False)
 
         if lr_scheduler is not None:
             lr_scheduler.step()
