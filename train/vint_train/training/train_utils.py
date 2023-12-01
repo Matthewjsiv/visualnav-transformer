@@ -6,6 +6,7 @@ from typing import List, Optional, Dict
 from prettytable import PrettyTable
 import tqdm
 import itertools
+import time
 
 from vint_train.visualizing.action_utils import visualize_traj_pred, plot_trajs_and_points
 from vint_train.visualizing.distance_utils import visualize_dist_pred
@@ -827,34 +828,71 @@ def train_vanilla_nomad(
             # L2 loss
             diffusion_loss = action_reduce(F.mse_loss(noise_pred, noise, reduction="none"))
 
-            # ##########
-            # diffusion_output = model_output(
-            #     model,
-            #     noise_scheduler,
-            #     costmap[0].unsqueeze(0),
-            #     64,
-            #     2,
-            #     10,
-            #     device,
-            # )
-            #
-            # #TODO double check this is right, replace hardcoded with params
-            # diffusion_output *= 30
-            # # diffusion_output = diffusion_output.long()
-            # res = 0.5
-            # diffusion_output = ((diffusion_output - torch.tensor([-30., -30]).reshape(1, 1, 2).cuda()) / 0.5).long()
-            # # print(diffusion_output.max(),diffusion_output.min())
-            # diffusion_output[diffusion_output > 119] = 119
-            # # print(diffusion_output.shape)
-            # costs = costmap[0,0,diffusion_output[:,:,0],diffusion_output[:,:,1]]/20
-            # # print(costs.shape)
-            # costs = costs.sum(axis=1)
-            # costs = F.relu(costs + (8+1.5)).mean()
-            # costs *= .1
-            # # print(costs.mean())
-            # ###########
-            costs = torch.tensor(0).cuda()
-            
+            costs = 0
+            num_tries = 10
+            for nt in range(num_tries):
+                # ##########
+                diffusion_output = model_output(
+                    model,
+                    noise_scheduler,
+                    costmap[nt].unsqueeze(0),
+                    64,
+                    2,
+                    20,
+                    device,
+                )
+
+                #TODO double check this is right, replace hardcoded with params
+                diffusion_output *= 30
+                # diffusion_output = diffusion_output.long()
+                res = 0.5
+                diffusion_output = ((diffusion_output - torch.tensor([-30., -30]).reshape(1, 1, 2).cuda()) / 0.5).long()
+                # print(diffusion_output.max(),diffusion_output.min())
+                diffusion_output[diffusion_output > 119] = 119
+                # print(diffusion_output.shape)
+                costs = costmap[nt,0,diffusion_output[:,:,0],diffusion_output[:,:,1]]/20
+                # print(costs.shape)
+                # print(costs.shape)
+                costs = costs.sum(axis=1)
+                costs = F.relu(costs + (-config['cost_threshold']+1.5)).mean()
+                costs += costs
+                # costs *= .1
+                # costs *= .5
+                # print(costs.mean())
+                # ###########
+                # # ##########
+                # diffusion_output = model_output(
+                #     model,
+                #     noise_scheduler,
+                #     costmap,
+                #     64,
+                #     2,
+                #     4,
+                #     device,
+                # ) #B*Kx64x2
+                #
+                # #TODO double check this is right, replace hardcoded with params
+                # diffusion_output *= 30
+                # # diffusion_output = diffusion_output.long()
+                # res = 0.5
+                # diffusion_output = ((diffusion_output - torch.tensor([-30., -30]).reshape(1, 1, 2).cuda()) / 0.5).long()
+                # # print(diffusion_output.max(),diffusion_output.min())
+                # diffusion_output[diffusion_output > 119] = 119
+                # # print(diffusion_output.shape)
+                # costmap = costmap.detach().repeat_interleave(4, dim=0) #B*Kx1x120x120
+                # costs = costmap[B*K,0,diffusion_output[:,:,0],diffusion_output[:,:,1]]/20
+                # # print(costs.shape)
+                # costs = costs.sum(axis=1)
+                # costs = F.relu(costs + (8+1.5)).mean()
+                # costs *= .1
+                # costs *= .005
+                # # print(costs.mean())
+                # # ###########
+                # costs = torch.tensor(0).cuda()
+
+            costs /= num_tries
+            costs *= 0.1
+
             loss = diffusion_loss + costs
 
             # print(loss)
@@ -874,9 +912,10 @@ def train_vanilla_nomad(
             wandb.log({"path_cost": costs.item()})
             wandb.log({"diffusion_loss": diffusion_loss.item()})
 
-            if i % 50 == 0:
+            if i % 30 == 0:
                 model.eval()
                 with torch.no_grad():
+                    now = time.perf_counter()
                     diffusion_output = model_output(
                         model,
                         noise_scheduler,
@@ -886,6 +925,7 @@ def train_vanilla_nomad(
                         20,
                         device,
                     )
+                    print('time: ', time.perf_counter() - now)
                     # print(diffusion_output.shape)
                     # diffusion_output = diffusion_output.permute(0,2,3,1)
                     # diffusion_output = torch.flatten(diffusion_output,end_dim=1).cpu().numpy()

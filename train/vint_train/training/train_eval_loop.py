@@ -224,7 +224,7 @@ def train_eval_loop_nomad(
                 config=config
             )
 
-        if epoch % 10 == 0:
+        if epoch % 25 == 0:
             numbered_path = os.path.join(project_folder, f"ema_{epoch}.pth")
             torch.save(ema_model.state_dict(), numbered_path)
             numbered_path = os.path.join(project_folder, f"ema_latest.pth")

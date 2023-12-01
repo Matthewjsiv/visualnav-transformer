@@ -4,7 +4,7 @@ run_name: nomad
 # training setup
 use_wandb: True # set to false if you don't want to log to wandb
 train: True
-batch_size: 16
+batch_size: 32
 eval_batch_size: 1
 epochs: 101
 gpu_ids: [0]
@@ -34,7 +34,7 @@ mha_ff_dim_factor: 4
 down_dims: [64, 128, 256]
 
 # diffusion model params
-num_diffusion_iters: 15
+num_diffusion_iters: 40
 
 # mask
 goal_mask_prob: 0.5
@@ -72,9 +72,9 @@ image_size: [96, 96] # width, height
 dataset_path: '/home/matthew/Documents/robot_learning/path_diffusion/traj_lib_testing/context_mppi_pipe_1.pt'
 traj_lib_path: '/home/matthew/Documents/robot_learning/path_diffusion/traj_lib_testing/traj_lib.npy'
 num_waypoints: 64
-num_trajectories: 12
-cost_threshold: -6.8
-num_buckets: 6
+num_trajectories: 6
+cost_threshold: -7.2
+num_buckets: 3
 
 # logging stuff
 ## =0 turns off

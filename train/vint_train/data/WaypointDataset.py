@@ -94,7 +94,7 @@ def quaternion_rotation_matrix(Q):
 
 
 class TrajLib(object):
-    def __init__(self, dataset_file, top_k, cost_threshold, num_buckets=6, visualize=False):
+    def __init__(self, dataset_file, top_k, cost_threshold, num_buckets=3, visualize=False):
         self.visualize = visualize
         self.dataset = torch.load(dataset_file)
         print("dataset loaded")
@@ -177,26 +177,28 @@ class TrajLibDataset(Dataset):
 
 if __name__ == "__main__":
     if TEST_LOCALLY:
-        traj_lib = TrajLib(dataset_file='/home/matthew/Documents/robot_learning/path_diffusion/traj_lib_testing/context_mppi_pipe_1.pt', top_k=18, cost_threshold=-7, visualize=True)
+        traj_lib = TrajLib(dataset_file='/home/matthew/Documents/robot_learning/path_diffusion/traj_lib_testing/context_mppi_pipe_1.pt', top_k=12, cost_threshold=-6.8, visualize=True)
         # for i in range(350,500):
         from tqdm import tqdm
-        for k in tqdm(range(357,1200)):
+        for k in tqdm(range(360,1200)):
             # i = np.random.choice(1100)
             i=k
             import time
             now = time.perf_counter()
             best_trajs, best_costs, costmap = traj_lib.get_top_trajs(i)
-            # print(time.perf_counter() -  now)
+            print(time.perf_counter() -  now)
             #normalize for vizualization
             costmap -= costmap.min()
             costmap /= costmap.max()
             best_costs /= best_costs.max()
 
             #plot top trajs on costmap (image per timestep)
-            # plt.imshow(costmap[0],origin='lower',extent=[-30, 30, -30, 30])
-            # for idx in range(18):
-            #     plt.plot(best_trajs[idx,:,1], best_trajs[idx,:,0], c=cmap(best_costs[idx]))
-            # plt.show()
+            plt.imshow(costmap[0],origin='lower',extent=[-30, 30, -30, 30])
+            for idx in range(12):
+                plt.plot(best_trajs[idx,:64,1], best_trajs[idx,:64,0], c=cmap(best_costs[idx]))
+            for idx in range(12):
+                plt.plot(best_trajs[idx,64:,1], best_trajs[idx,64:,0])
+            plt.show()
 
 
 if __name__ == "__main__":
